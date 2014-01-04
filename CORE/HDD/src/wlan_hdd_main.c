@@ -3152,16 +3152,38 @@ int hdd_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
        else if (strncmp(command, "BTCOEXMODE", 10) == 0 )
        {
            char *dhcpPhase;
-           dhcpPhase = command + 12;
+           dhcpPhase = command + 11;
            if ('1' == *dhcpPhase)
            {
+               VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
+                         FL("BTCOEXMODE %d"), *dhcpPhase);
+
+               pHddCtx->btCoexModeSet = TRUE;
+
+              /* Firmware failing to process DHCP START/STOP indications.
+               * So, for now commentig below code, once issue is resolved,
+               * follwing will be uncommented.
+               */
+               #if 0
                sme_DHCPStartInd(pHddCtx->hHal, pAdapter->device_mode,
                                 pAdapter->macAddressCurrent.bytes);
+               #endif
            }
            else if ('2' == *dhcpPhase)
            {
+               VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
+                         FL("BTCOEXMODE %d"), *dhcpPhase);
+
+               pHddCtx->btCoexModeSet = FALSE;
+
+               /* Firmware failing to process DHCP START/STOP indications.
+                * So, for now commentig below code, once issue is resolved,
+                * follwing will be uncommented.
+                */
+               #if 0
                sme_DHCPStopInd(pHddCtx->hHal, pAdapter->device_mode,
                                pAdapter->macAddressCurrent.bytes);
+               #endif
            }
        }
        else if (strncmp(command, "SCAN-ACTIVE", 11) == 0)
@@ -3303,11 +3325,12 @@ int hdd_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
               goto exit;
            }
 
-           if ((WLAN_HDD_INFRA_STATION != pAdapter->device_mode) &&
-              (WLAN_HDD_P2P_CLIENT != pAdapter->device_mode))
+          if ((WLAN_HDD_INFRA_STATION != pAdapter->device_mode) &&
+              (WLAN_HDD_P2P_CLIENT != pAdapter->device_mode) &&
+              (WLAN_HDD_P2P_DEVICE != pAdapter->device_mode))
            {
               VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
-                "Received WLS_BATCHING_VERSION command in invalid mode %d "
+                "Received WLS_BATCHING VERSION command in invalid mode %d "
                 "WLS_BATCHING_VERSION is only allowed in infra STA/P2P client"
                 " mode",
                 pAdapter->device_mode);
@@ -5489,23 +5512,36 @@ void hdd_deinit_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter )
 
 void hdd_cleanup_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter, tANI_U8 rtnl_held )
 {
-   struct net_device *pWlanDev = pAdapter->dev;
+   struct net_device *pWlanDev;
+
+   ENTER();
+   if (NULL == pAdapter)
+   {
+      VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
+                 "%s: HDD adapter is Null", __func__);
+      return;
+   }
+
+   pWlanDev = pAdapter->dev;
 
 #ifdef FEATURE_WLAN_BATCH_SCAN
+   if ((pAdapter->device_mode == WLAN_HDD_INFRA_STATION)
+     || (pAdapter->device_mode == WLAN_HDD_P2P_CLIENT)
+     || (pAdapter->device_mode == WLAN_HDD_P2P_DEVICE)
+     )
+   {
       tHddBatchScanRsp *pNode;
       tHddBatchScanRsp *pPrev;
-      if (pAdapter)
+      pNode = pAdapter->pBatchScanRsp;
+      while (pNode)
       {
-          pNode = pAdapter->pBatchScanRsp;
-          while (pNode)
-          {
-              pPrev = pNode;
-              pNode = pNode->pNext;
-              vos_mem_free((v_VOID_t * )pPrev);
-              pPrev = NULL;
-          }
-          pAdapter->pBatchScanRsp = NULL;
+          pPrev = pNode;
+          pNode = pNode->pNext;
+          vos_mem_free((v_VOID_t * )pPrev);
+          pPrev = NULL;
       }
+      pAdapter->pBatchScanRsp = NULL;
+    }
 #endif
 
    if(test_bit(NET_DEVICE_REGISTERED, &pAdapter->event_flags)) {
@@ -5521,6 +5557,7 @@ void hdd_cleanup_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter, tANI_
       // since the memory has been reclaimed
    }
 
+   EXIT();
 }
 
 void hdd_set_pwrparams(hdd_context_t *pHddCtx)
@@ -8298,6 +8335,12 @@ int hdd_wlan_startup(struct device *dev )
 #endif
    // Initialize the restart logic
    wlan_hdd_restart_init(pHddCtx);
+
+#ifdef FEATURE_WLAN_CH_AVOID
+    /* Plug in avoid channel notification callback */
+    sme_AddChAvoidCallback(pHddCtx->hHal,
+                           hdd_hostapd_ch_avoid_cb);
+#endif /* FEATURE_WLAN_CH_AVOID */
 
    //Register the traffic monitor timer now
    if ( pHddCtx->cfg_ini->dynSplitscan)
